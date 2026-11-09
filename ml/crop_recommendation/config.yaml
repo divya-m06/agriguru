@@ -1,0 +1,44 @@
+seed: 42
+
+data:
+  filename: "Crop_recommendation.csv"
+  default_url: "https://raw.githubusercontent.com/Gladiator07/Harvestify/master/Data-processed/crop_recommendation.csv"
+  expected_rows: 2200
+  expected_features:
+    - N
+    - P
+    - K
+    - temperature
+    - humidity
+    - ph
+    - rainfall
+  target: label
+  n_classes: 22
+  expected_samples_per_class: 100
+
+split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  stratified: true
+
+cv:
+  n_splits: 5
+  n_repeats: 3
+  scoring: "f1_macro"
+  random_state: 42
+
+features:
+  run_ablation: true
+  use_engineered_features: false
+
+tuning:
+  n_iter: 30
+  cv_splits: 5
+  random_state: 42
+  n_jobs: -1
+
+paths:
+  artifacts_dir: "artifacts/crop_recommendation"
+  reports_dir: "reports/crop_recommendation"
+  data_dir: "data/crop_recommendation"

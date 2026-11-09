@@ -1,0 +1,13 @@
+# Pinned dependencies for production ML training and inference
+numpy==2.4.6
+scipy==1.17.1
+pandas==3.0.5
+scikit-learn==1.9.1
+xgboost==3.2.0
+lightgbm==4.7.0
+joblib==1.6.0
+matplotlib==3.11.2
+seaborn==0.13.2
+PyYAML==6.0.3
+pytest==9.1.1
+requests==2.34.2
