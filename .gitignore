@@ -41,6 +41,7 @@ htmlcov/
 data/
 artifacts/
 reports/
+catboost_info/
 *.joblib
 *.pkl
 *.keras

@@ -105,3 +105,84 @@ def calculate_classification_metrics(
     metrics["confusion_matrix_normalized"] = cm_norm.tolist()
 
     return metrics
+
+
+def calculate_smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-8) -> float:
+    """Calculate Symmetric Mean Absolute Percentage Error (sMAPE).
+
+    sMAPE = (100% / n) * sum( 2 * |y - y_hat| / (|y| + |y_hat| + eps) )
+    Range: 0% to 200%. Handles low/zero yields stably without division by zero.
+    """
+    y_true_arr = np.asarray(y_true, dtype=float)
+    y_pred_arr = np.asarray(y_pred, dtype=float)
+    denominator = np.abs(y_true_arr) + np.abs(y_pred_arr) + eps
+    smape = np.mean(2.0 * np.abs(y_pred_arr - y_true_arr) / denominator) * 100.0
+    return float(smape)
+
+
+def calculate_regression_metrics(
+    y_true: Sequence[float] | np.ndarray,
+    y_pred: Sequence[float] | np.ndarray,
+) -> Dict[str, float]:
+    """Calculate core regression metrics in hg/ha and t/ha.
+
+    Args:
+        y_true: Ground truth target values (hg/ha).
+        y_pred: Predicted target values (hg/ha).
+
+    Returns:
+        Dictionary containing R2, RMSE (hg/ha & t/ha), MAE (hg/ha & t/ha), and sMAPE (%).
+    """
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+    y_true_arr = np.asarray(y_true, dtype=float)
+    y_pred_arr = np.asarray(y_pred, dtype=float)
+
+    r2 = float(r2_score(y_true_arr, y_pred_arr))
+    mae = float(mean_absolute_error(y_true_arr, y_pred_arr))
+    rmse = float(np.sqrt(mean_squared_error(y_true_arr, y_pred_arr)))
+    smape = calculate_smape(y_true_arr, y_pred_arr)
+
+    # 1 tonne/hectare (t/ha) = 10,000 hectograms/hectare (hg/ha)
+    return {
+        "r2": r2,
+        "rmse_hg_ha": rmse,
+        "mae_hg_ha": mae,
+        "rmse_t_ha": rmse / 10000.0,
+        "mae_t_ha": mae / 10000.0,
+        "smape_pct": smape,
+    }
+
+
+def calculate_per_crop_metrics(
+    y_true: Sequence[float] | np.ndarray,
+    y_pred: Sequence[float] | np.ndarray,
+    crops: Sequence[str] | np.ndarray,
+) -> Dict[str, Dict[str, float]]:
+    """Compute per-crop regression metrics breakdown to diagnose variance dominance across crops.
+
+    Args:
+        y_true: Ground truth yields.
+        y_pred: Predicted yields.
+        crops: Array of crop (Item) labels corresponding to each sample.
+
+    Returns:
+        Dictionary mapping each crop name to its specific regression metrics and sample count.
+    """
+    y_true_arr = np.asarray(y_true, dtype=float)
+    y_pred_arr = np.asarray(y_pred, dtype=float)
+    crops_arr = np.asarray(crops)
+
+    unique_crops = np.unique(crops_arr)
+    breakdown = {}
+
+    for crop in unique_crops:
+        mask = (crops_arr == crop)
+        if np.sum(mask) == 0:
+            continue
+        crop_metrics = calculate_regression_metrics(y_true_arr[mask], y_pred_arr[mask])
+        crop_metrics["sample_count"] = int(np.sum(mask))
+        crop_metrics["mean_true_yield_hg_ha"] = float(np.mean(y_true_arr[mask]))
+        breakdown[str(crop)] = crop_metrics
+
+    return breakdown

@@ -152,6 +152,7 @@ def plot_feature_importance(
     importances_std: np.ndarray,
     output_path: Path | str,
     title: str = "Permutation Feature Importance",
+    metric_label: str = "Mean Metric Decrease",
 ) -> None:
     """Plot horizontal bar chart of permutation feature importances."""
     sorted_idx = np.argsort(importances_mean)
@@ -168,7 +169,7 @@ def plot_feature_importance(
         capsize=4,
     )
     plt.yticks(pos, [feature_names[i] for i in sorted_idx], fontsize=11)
-    plt.xlabel("Mean Decrease in Macro-F1", fontsize=12)
+    plt.xlabel(metric_label, fontsize=12)
     plt.title(title, fontsize=14, pad=12)
     plt.grid(axis="x", linestyle="--", alpha=0.5)
     plt.tight_layout()
@@ -206,3 +207,85 @@ def plot_noise_robustness(
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=300)
     plt.close()
+
+
+def plot_predicted_vs_actual(
+    y_true: Sequence[float] | np.ndarray,
+    y_pred: Sequence[float] | np.ndarray,
+    output_path: Path | str,
+    title: str = "Crop Yield: Predicted vs Actual",
+    unit: str = "hg/ha",
+) -> None:
+    """Plot scatter plot of predicted versus actual continuous targets with ideal identity line."""
+    y_true_arr = np.asarray(y_true, dtype=float)
+    y_pred_arr = np.asarray(y_pred, dtype=float)
+
+    plt.figure(figsize=(8, 8))
+    plt.scatter(y_true_arr, y_pred_arr, alpha=0.35, color="#1f77b4", edgecolors="none", s=25)
+
+    min_val = min(float(np.min(y_true_arr)), float(np.min(y_pred_arr)))
+    max_val = max(float(np.max(y_true_arr)), float(np.max(y_pred_arr)))
+    plt.plot([min_val, max_val], [min_val, max_val], "r--", linewidth=1.5, label="Perfect 1:1 Prediction")
+
+    plt.title(title, fontsize=14, pad=12)
+    plt.xlabel(f"Actual Yield ({unit})", fontsize=12)
+    plt.ylabel(f"Predicted Yield ({unit})", fontsize=12)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.legend(loc="upper left", fontsize=11)
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
+def plot_residuals_by_crop(
+    y_true: Sequence[float] | np.ndarray,
+    y_pred: Sequence[float] | np.ndarray,
+    crops: Sequence[str] | np.ndarray,
+    output_path: Path | str,
+    title: str = "Residual Distribution by Crop",
+) -> None:
+    """Boxplot of prediction residuals (y_pred - y_true) grouped by crop."""
+    residuals = np.asarray(y_pred, dtype=float) - np.asarray(y_true, dtype=float)
+    df = pd.DataFrame({"Crop": crops, "Residual": residuals})
+
+    # Sort crops by median residual magnitude
+    order = df.groupby("Crop")["Residual"].median().sort_values().index
+
+    plt.figure(figsize=(11, 6))
+    sns.boxplot(data=df, x="Crop", y="Residual", order=order, hue="Crop", palette="Set2", legend=False)
+    plt.axhline(0, color="red", linestyle="--", linewidth=1.2)
+    plt.title(title, fontsize=14, pad=12)
+    plt.xlabel("Crop (Item)", fontsize=12)
+    plt.ylabel("Residual (Predicted - Actual, hg/ha)", fontsize=12)
+    plt.xticks(rotation=45, ha="right", fontsize=10)
+    plt.grid(axis="y", linestyle="--", alpha=0.5)
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
+def plot_residuals_by_year(
+    y_true: Sequence[float] | np.ndarray,
+    y_pred: Sequence[float] | np.ndarray,
+    years: Sequence[int] | np.ndarray,
+    output_path: Path | str,
+    title: str = "Mean Absolute Error by Year",
+) -> None:
+    """Plot temporal MAE trend across evaluation years."""
+    mae_per_sample = np.abs(np.asarray(y_pred, dtype=float) - np.asarray(y_true, dtype=float))
+    df = pd.DataFrame({"Year": years, "MAE": mae_per_sample})
+    yearly = df.groupby("Year")["MAE"].mean().reset_index()
+
+    plt.figure(figsize=(8, 5))
+    plt.plot(yearly["Year"], yearly["MAE"], "o-", color="#d62728", linewidth=2, markersize=6)
+    plt.title(title, fontsize=14, pad=12)
+    plt.xlabel("Evaluation Year", fontsize=12)
+    plt.ylabel("MAE (hg/ha)", fontsize=12)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
