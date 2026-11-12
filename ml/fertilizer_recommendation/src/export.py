@@ -5,7 +5,7 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import joblib
 import numpy as np
 import sklearn
@@ -41,6 +41,8 @@ def export_fertilizer_artifacts(
     output_dir: Path | str,
     config: Dict[str, Any],
     seed: int,
+    run_mode: str = "full",
+    train_row_count: Optional[int] = None,
 ) -> Path:
     """Export all production artifacts for deployment and reproducibility.
 
@@ -118,6 +120,8 @@ def export_fertilizer_artifacts(
     # 7. Metadata
     metadata = {
         "model_name": chosen_model_name,
+        "run_mode": run_mode,
+        "train_row_count": train_row_count,
         "export_timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": get_git_commit_hash(),
         "seed": seed,

@@ -6,7 +6,11 @@ import pytest
 
 from ml.yield_prediction.inference import CropYieldPredictor, load_model, predict_yield
 
-ARTIFACTS_DIR = Path("artifacts/yield_prediction")
+ARTIFACTS_DIR = (
+    Path("artifacts/yield_prediction")
+    if (Path("artifacts/yield_prediction") / "yield_model.joblib").exists()
+    else Path("artifacts/yield_prediction_quick")
+)
 VARIANT_A_DIR = ARTIFACTS_DIR / "variant_a"
 SPLITS_DIR = Path("data/yield_prediction/splits")
 

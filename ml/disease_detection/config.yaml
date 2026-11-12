@@ -1,0 +1,70 @@
+seed: 42
+
+data:
+  dataset_name: "PlantVillage"
+  kaggle_dataset: "abdallahalidev/plantvillage-dataset"
+  image_size: [224, 224]
+  channels: 3
+  split_ratios:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+  phash:
+    hash_size: 8
+    hamming_threshold: 4
+  valid_extensions: [".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG"]
+  exclude_dir_keywords: ["grayscale", "segmented", "gray"]
+
+augmentation:
+  random_flip: "horizontal_and_vertical"
+  random_rotation: 0.15
+  random_zoom: 0.15
+  random_brightness: 0.10
+  random_contrast: 0.10
+
+training:
+  batch_size: 32
+  min_batch_size: 4
+  mixed_precision: "auto"  # "auto", true, or false
+  label_smoothing: 0.05
+  phase1:
+    epochs: 8
+    learning_rate: 0.001
+    optimizer: "adam"
+  phase2:
+    epochs: 20
+    learning_rate: 0.00003
+    optimizer: "adam"
+    unfreeze_top_percent: 0.35
+  callbacks:
+    early_stopping_patience: 4
+    reduce_lr_patience: 2
+    reduce_lr_factor: 0.2
+    min_lr: 0.000001
+
+tuning:
+  phase2_learning_rates: [0.00001, 0.00003, 0.0001]
+  dropout_rates: [0.2, 0.3, 0.5]
+  unfreeze_fractions: [0.2, 0.35, 0.5]
+
+architectures:
+  primary: "EfficientNetB0"
+  lightweight: "MobileNetV2"
+  optional_heavy: "ResNet50"
+  head:
+    dropout: 0.3
+
+calibration:
+  ece_bins: 15
+  default_uncertainty_threshold: 0.65
+
+robustness:
+  brightness_factors: [0.6, 1.4]
+  gaussian_blur_sigmas: [1.0, 2.5]
+  jpeg_qualities: [40, 70]
+  rotation_angles: [-15, 15]
+
+paths:
+  data_dir: "data/disease_detection"
+  output_dir: "reports/disease_detection"
+  artifacts_dir: "artifacts/disease_detection"

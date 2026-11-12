@@ -233,6 +233,13 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     artifacts_dir = Path(args.artifacts_dir)
     data_dir = Path(args.data_dir)
+
+    if args.quick:
+        if args.output_dir == "reports/crop_recommendation":
+            output_dir = Path("reports/crop_recommendation_quick")
+        if args.artifacts_dir == "artifacts/crop_recommendation":
+            artifacts_dir = Path("artifacts/crop_recommendation_quick")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -241,7 +248,7 @@ def main() -> None:
     logger = setup_logger("ml.crop_recommendation", log_file=output_dir / "train.log")
     logger.info("Initializing Crop Recommendation training pipeline with seed=%d...", seed)
     if args.quick:
-        logger.warning("Running in QUICK smoke-test mode!")
+        logger.warning("Running in QUICK smoke-test mode! Output -> %s, Artifacts -> %s", output_dir, artifacts_dir)
 
     # 3. Load & validate data
     df_raw = load_dataset(
@@ -460,6 +467,8 @@ def main() -> None:
         seed=seed,
         noise_robustness=robustness_results,
         feature_engineering_used=keep_engineering,
+        run_mode="quick" if args.quick else "full",
+        train_row_count=len(X_train),
     )
 
     # 15. Generate REPORT.md

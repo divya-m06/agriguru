@@ -12,6 +12,7 @@ from sklearn.model_selection import (
     RandomizedSearchCV,
 )
 from sklearn.pipeline import Pipeline
+import time
 
 from ml.common.metrics import (
     calculate_classification_metrics,
@@ -34,6 +35,7 @@ def evaluate_candidates_repeated_cv(
     add_engineered_features: bool = False,
     seed: int = 42,
     cache_dir: Optional[Path | str] = None,
+    code_hash: str = "",
 ) -> pd.DataFrame:
     """Evaluate candidate classifiers under Repeated Stratified 5-Fold Cross-Validation with stage caching.
 
@@ -46,6 +48,7 @@ def evaluate_candidates_repeated_cv(
         add_engineered_features: Feature ablation flag.
         seed: Random seed.
         cache_dir: Optional caching directory.
+        code_hash: Code and config hash for cache key validation.
 
     Returns:
         DataFrame ranking candidates by macro-F1 with 95% confidence intervals.
@@ -64,7 +67,8 @@ def evaluate_candidates_repeated_cv(
                 len(candidate_names), n_splits, n_repeats, n_splits * n_repeats)
 
     for name in candidate_names:
-        item_cache_file = cache_path / f"{name}.json" if cache_path else None
+        cache_filename = f"{name}_seed{seed}_{code_hash}.json" if code_hash else f"{name}.json"
+        item_cache_file = cache_path / cache_filename if cache_path else None
         if item_cache_file and item_cache_file.exists():
             try:
                 with open(item_cache_file, "r", encoding="utf-8") as f:
@@ -78,6 +82,7 @@ def evaluate_candidates_repeated_cv(
             except Exception as e:
                 logger.warning("Failed to load cache for %s: %s. Recomputing...", name, e)
 
+        t0 = time.perf_counter()
         acc_scores = []
         f1_scores = []
         top3_scores = []
@@ -108,6 +113,7 @@ def evaluate_candidates_repeated_cv(
             else:
                 top3_scores.append(float(accuracy_score(y_va, preds)))
 
+        elapsed = time.perf_counter() - t0
         acc_ci = calculate_confidence_interval(acc_scores)
         f1_ci = calculate_confidence_interval(f1_scores)
         top3_ci = calculate_confidence_interval(top3_scores)
@@ -126,6 +132,7 @@ def evaluate_candidates_repeated_cv(
             "macro_f1_ci_upper": f1_ci["ci_upper"],
             "top_3_accuracy_mean": top3_ci["mean"],
             "top_3_accuracy_std": top3_ci["std"],
+            "elapsed_seconds": round(elapsed, 2),
         }
         results.append(scores)
 
@@ -133,10 +140,10 @@ def evaluate_candidates_repeated_cv(
             with open(item_cache_file, "w", encoding="utf-8") as f:
                 json.dump(scores, f, indent=2)
 
-        logger.info("[%s] Macro-F1: %.4f (+/- %.4f) [95%% CI: %.4f - %.4f] | Accuracy: %.4f | Top-3 Acc: %.4f",
+        logger.info("[%s] Macro-F1: %.4f (+/- %.4f) [95%% CI: %.4f - %.4f] | Accuracy: %.4f | Top-3 Acc: %.4f (Elapsed: %.2fs)",
                     name, scores["macro_f1_mean"], scores["macro_f1_std"],
                     scores["macro_f1_ci_lower"], scores["macro_f1_ci_upper"],
-                    scores["accuracy_mean"], scores["top_3_accuracy_mean"])
+                    scores["accuracy_mean"], scores["top_3_accuracy_mean"], elapsed)
 
     df_res = pd.DataFrame(results).sort_values(by="macro_f1_mean", ascending=False).reset_index(drop=True)
     return df_res
@@ -152,12 +159,14 @@ def run_nested_cv_tuning(
     n_iter: int = 20,
     seed: int = 42,
     cache_dir: Optional[Path | str] = None,
+    code_hash: str = "",
 ) -> Tuple[Pipeline, Dict[str, Any], Dict[str, float]]:
     """Execute rigorous Nested Cross-Validation (outer repeated 5-fold, inner 3-fold) with caching.
 
     Returns unbiased generalization score from outer folds and refits on full dataset with best parameters.
     """
-    cache_file = Path(cache_dir) / f"nested_tuning_{candidate_name}.json" if cache_dir else None
+    cache_filename = f"nested_tuning_{candidate_name}_seed{seed}_{code_hash}.json" if code_hash else f"nested_tuning_{candidate_name}.json"
+    cache_file = Path(cache_dir) / cache_filename if cache_dir else None
     if cache_file and cache_file.exists():
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
@@ -177,6 +186,7 @@ def run_nested_cv_tuning(
         except Exception as e:
             logger.warning("Failed to load nested tuning cache for %s: %s. Retuning...", candidate_name, e)
 
+    t0 = time.perf_counter()
     X = df.drop(columns=[target_col, "fertilizer_name"], errors="ignore")
     y = df[target_col].to_numpy()
     param_dist = get_fertilizer_tuning_grid(candidate_name)
@@ -265,15 +275,18 @@ def run_nested_cv_tuning(
         final_best_params = {}
         champion_pipeline = final_pipe
 
-    logger.info("Nested CV Results for %s: Macro-F1 = %.4f (+/- %.4f) [95%% CI: %.4f - %.4f] | Accuracy = %.4f",
+    elapsed = time.perf_counter() - t0
+    nested_metrics["elapsed_seconds"] = round(elapsed, 2)
+
+    logger.info("Nested CV Results for %s: Macro-F1 = %.4f (+/- %.4f) [95%% CI: %.4f - %.4f] | Accuracy = %.4f (Elapsed: %.2fs)",
                 candidate_name, nested_metrics["nested_macro_f1_mean"], nested_metrics["nested_macro_f1_std"],
                 nested_metrics["nested_macro_f1_ci_lower"], nested_metrics["nested_macro_f1_ci_upper"],
-                nested_metrics["nested_accuracy_mean"])
+                nested_metrics["nested_accuracy_mean"], elapsed)
 
     if cache_file:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump({"best_params": final_best_params, "nested_metrics": nested_metrics}, f, indent=2)
+            json.dump({"best_params": final_best_params, "nested_metrics": nested_metrics, "elapsed_seconds": round(elapsed, 2)}, f, indent=2)
 
     return champion_pipeline, final_best_params, nested_metrics
 
@@ -286,9 +299,11 @@ def run_label_permutation_test(
     n_splits: int = 5,
     seed: int = 42,
     cache_dir: Optional[Path | str] = None,
+    code_hash: str = "",
 ) -> Dict[str, Any]:
     """Execute label permutation test (200 shuffles) to rigorously prove model beats random chance."""
-    cache_file = Path(cache_dir) / "permutation_test.json" if cache_dir else None
+    cache_filename = f"permutation_test_seed{seed}_{code_hash}.json" if code_hash else "permutation_test.json"
+    cache_file = Path(cache_dir) / cache_filename if cache_dir else None
     if cache_file and cache_file.exists():
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
@@ -299,6 +314,7 @@ def run_label_permutation_test(
         except Exception:
             pass
 
+    t0 = time.perf_counter()
     X = df.drop(columns=[target_col, "fertilizer_name"], errors="ignore")
     y = df[target_col].to_numpy()
 
@@ -333,6 +349,7 @@ def run_label_permutation_test(
     # Empirical p-value
     count_better = int(np.sum(np.array(null_scores) >= observed_score))
     p_value = (count_better + 1.0) / (n_permutations + 1.0)
+    elapsed = time.perf_counter() - t0
 
     result = {
         "observed_score": observed_score,
@@ -341,6 +358,7 @@ def run_label_permutation_test(
         "null_std": float(np.std(null_scores)),
         "p_value": float(p_value),
         "n_permutations": n_permutations,
+        "elapsed_seconds": round(elapsed, 2),
     }
 
     if cache_file:
@@ -348,8 +366,8 @@ def run_label_permutation_test(
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
 
-    logger.info("Permutation test complete: Observed Macro-F1 = %.4f | Null Mean = %.4f | p-value = %.4f (%s)",
-                observed_score, result["null_mean"], p_value, "Significant (p < 0.01)" if p_value < 0.01 else "Not Significant")
+    logger.info("Permutation test complete in %.2fs: Observed Macro-F1 = %.4f | Null Mean = %.4f | p-value = %.4f (%s)",
+                elapsed, observed_score, result["null_mean"], p_value, "Significant (p < 0.01)" if p_value < 0.01 else "Not Significant")
 
     return result
 

@@ -1,10 +1,12 @@
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
@@ -58,10 +60,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=str, default="ml/yield_prediction/config.yaml", help="YAML config path")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     parser.add_argument("--quick", action="store_true", help="Quick smoke test mode (subsample & fast models)")
-    parser.add_argument("--n-trials", type=int, default=20, help="Hyperparameter search trials (default: 20)")
+    parser.add_argument("--n-trials", type=int, default=8, help="Hyperparameter search trials (default: 8)")
     parser.add_argument("--export-variant", type=str, choices=["A", "B"], default="B",
                         help="Primary variant to deploy in artifacts_dir (default: B, full info with Area)")
     return parser.parse_args()
+
+
+def compute_code_hash(model_dir: Path) -> str:
+    """Compute deterministic SHA256 digest of config and all source files."""
+    hasher = hashlib.sha256()
+    cfg_file = model_dir / "config.yaml"
+    if cfg_file.exists():
+        hasher.update(cfg_file.read_bytes())
+    for py_file in sorted((model_dir / "src").glob("*.py")):
+        hasher.update(py_file.read_bytes())
+    common_dir = model_dir.parent / "common"
+    if common_dir.exists():
+        for py_file in sorted(common_dir.glob("*.py")):
+            hasher.update(py_file.read_bytes())
+    return hasher.hexdigest()[:8]
 
 
 def run_feature_ablation_study(
@@ -69,6 +86,7 @@ def run_feature_ablation_study(
     seed: int,
     champion_model: str,
     cache_dir: Optional[Path | str] = None,
+    code_hash: str = "",
 ) -> pd.DataFrame:
     """Evaluate feature engineering configurations on training split under temporal CV using the champion model."""
     logger.info("Running feature engineering ablation on temporal CV using champion model family: %s...", champion_model)
@@ -90,7 +108,8 @@ def run_feature_ablation_study(
     ablation_results = []
     for cfg in configs:
         slug = re.sub(r"[^a-zA-Z0-9_]+", "_", cfg["name"].lower()).strip("_")
-        cache_file = ablation_cache_dir / f"{slug}_{champion_model}.json" if ablation_cache_dir else None
+        cache_filename = f"{slug}_{champion_model}_seed{seed}_{code_hash}.json" if code_hash else f"{slug}_{champion_model}.json"
+        cache_file = ablation_cache_dir / cache_filename if ablation_cache_dir else None
 
         if cache_file and cache_file.exists():
             try:
@@ -103,6 +122,7 @@ def run_feature_ablation_study(
             except Exception:
                 pass
 
+        t0 = time.perf_counter()
         pipe = create_yield_pipeline(
             model_name=champion_model,
             include_area=cfg["area"],
@@ -112,16 +132,18 @@ def run_feature_ablation_study(
             random_state=seed,
         )
         scores = run_temporal_cv(pipe, df_train, splits)
+        elapsed = time.perf_counter() - t0
         scores["configuration"] = cfg["name"]
         scores["eval_model"] = champion_model
+        scores["elapsed_seconds"] = round(elapsed, 2)
         ablation_results.append(scores)
 
         if cache_file:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(scores, f, indent=2)
 
-        logger.info("[Ablation: %s] CV R2: %.4f (+/- %.4f) | MAE: %.1f hg/ha | sMAPE: %.2f%%",
-                    cfg["name"], scores["r2_mean"], scores["r2_std"], scores["mae_mean"], scores["smape_mean"])
+        logger.info("[Ablation: %s] CV R2: %.4f (+/- %.4f) | MAE: %.1f hg/ha | sMAPE: %.2f%% (Elapsed: %.2fs)",
+                    cfg["name"], scores["r2_mean"], scores["r2_std"], scores["mae_mean"], scores["smape_mean"], elapsed)
 
     return pd.DataFrame(ablation_results)
 
@@ -304,14 +326,24 @@ def generate_markdown_report(
 
 
 def main() -> None:
+    main_start_time = time.perf_counter()
     args = parse_args()
+
+    model_dir = Path(__file__).resolve().parent
+    code_hash = compute_code_hash(model_dir)
 
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     artifacts_dir = Path(args.artifacts_dir)
     config_path = Path(args.config)
-    cache_dir = output_dir / "cache"
 
+    if args.quick:
+        if args.output_dir == "reports/yield_prediction":
+            output_dir = Path("reports/yield_prediction_quick")
+        if args.artifacts_dir == "artifacts/yield_prediction":
+            artifacts_dir = Path("artifacts/yield_prediction_quick")
+
+    cache_dir = output_dir / "cache"
     output_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -319,8 +351,9 @@ def main() -> None:
     # 1. Setup dual logger & seed
     setup_logger("ml.yield_prediction", log_file=output_dir / "train.log")
     seed_everything(args.seed)
-    logger.info("Starting Crop Yield Training Pipeline (Quick Mode: %s, Seed: %d, N-Trials: %d)",
-                args.quick, args.seed, args.n_trials)
+    logger.info("Starting Crop Yield Training Pipeline (Quick Mode: %s, Seed: %d, N-Trials: %d, CodeHash: %s)",
+                args.quick, args.seed, args.n_trials, code_hash)
+    logger.info("Output Dir: %s | Artifacts Dir: %s | Cache Dir: %s", output_dir, artifacts_dir, cache_dir)
 
     # 2. Load configuration
     with open(config_path, "r", encoding="utf-8") as f:
@@ -395,11 +428,11 @@ def main() -> None:
         ]
 
     logger.info("--- Comparing Candidate Models on Variant A (Without Area) ---")
-    df_cand_a = compare_candidates_cv(candidates_a, df_train, include_area=False, seed=args.seed, cache_dir=cache_dir)
+    df_cand_a = compare_candidates_cv(candidates_a, df_train, include_area=False, seed=args.seed, cache_dir=cache_dir, code_hash=code_hash)
     df_cand_a["variant"] = "Variant A"
 
     logger.info("--- Comparing Candidate Models on Variant B (With Area) ---")
-    df_cand_b = compare_candidates_cv(candidates_b, df_train, include_area=True, seed=args.seed, cache_dir=cache_dir)
+    df_cand_b = compare_candidates_cv(candidates_b, df_train, include_area=True, seed=args.seed, cache_dir=cache_dir, code_hash=code_hash)
     df_cand_b["variant"] = "Variant B"
 
     all_candidates_df = pd.concat([df_cand_a, df_cand_b], ignore_index=True)
@@ -417,13 +450,14 @@ def main() -> None:
         seed=args.seed,
         champion_model=champion_for_ablation,
         cache_dir=cache_dir,
+        code_hash=code_hash,
     )
 
     # 8. Unseen Country Generalization (GroupKFold by Area on Variant B Champion)
     logger.info("Evaluating Country Generalization (GroupKFold by Area on %s)...", best_cand_b)
     gkf_pipe = create_yield_pipeline(best_cand_b, include_area=True, random_state=args.seed)
     group_kfold_metrics = run_group_kfold_cv(
-        gkf_pipe, df_train, n_splits=5, seed=args.seed, cache_dir=cache_dir, model_name=best_cand_b
+        gkf_pipe, df_train, n_splits=5, seed=args.seed, cache_dir=cache_dir, model_name=best_cand_b, code_hash=code_hash
     )
     logger.info("GroupKFold Results -> R2: %.4f | MAE: %.1f | sMAPE: %.2f%%",
                 group_kfold_metrics["group_kfold_r2_mean"],
@@ -434,7 +468,7 @@ def main() -> None:
     logger.info("Evaluating Leaky Random-Split CV on %s to quantify leakage gap...", best_cand_b)
     rand_pipe = create_yield_pipeline(best_cand_b, include_area=True, random_state=args.seed)
     leaky_random_metrics = run_leaky_random_split_cv(
-        rand_pipe, df_train, n_splits=5, seed=args.seed, cache_dir=cache_dir, model_name=best_cand_b
+        rand_pipe, df_train, n_splits=5, seed=args.seed, cache_dir=cache_dir, model_name=best_cand_b, code_hash=code_hash
     )
     logger.info("Leaky Random-Split CV R2: %.4f (vs Temporal CV R2: %.4f)",
                 leaky_random_metrics["random_split_leaky_r2"], df_cand_b["r2_mean"].max())
@@ -442,15 +476,20 @@ def main() -> None:
     # 10. Hyperparameter Tuning on Champions
     n_tune_iter = 2 if args.quick else args.n_trials
 
-    logger.info("Tuning Variant A Champion (%s)...", best_cand_a)
-    tuned_pipe_a, best_params_a, cv_r2_a = tune_yield_model(
-        best_cand_a, df_train, include_area=False, n_iter=n_tune_iter, seed=args.seed, cache_dir=cache_dir
-    )
-
-    logger.info("Tuning Variant B Champion (%s)...", best_cand_b)
-    tuned_pipe_b, best_params_b, cv_r2_b = tune_yield_model(
-        best_cand_b, df_train, include_area=True, n_iter=n_tune_iter, seed=args.seed, cache_dir=cache_dir
-    )
+    if args.export_variant == "A":
+        logger.info("Tuning Variant A Champion (%s)...", best_cand_a)
+        tuned_pipe_a, best_params_a, cv_r2_a = tune_yield_model(
+            best_cand_a, df_train, include_area=False, n_iter=n_tune_iter, seed=args.seed, cache_dir=cache_dir, code_hash=code_hash
+        )
+        tuned_pipe_b = create_yield_pipeline(best_cand_b, include_area=True, random_state=args.seed)
+        best_params_b, cv_r2_b = {}, df_cand_b["r2_mean"].max()
+    else:
+        logger.info("Tuning Variant B Champion (%s)...", best_cand_b)
+        tuned_pipe_b, best_params_b, cv_r2_b = tune_yield_model(
+            best_cand_b, df_train, include_area=True, n_iter=n_tune_iter, seed=args.seed, cache_dir=cache_dir, code_hash=code_hash
+        )
+        tuned_pipe_a = create_yield_pipeline(best_cand_a, include_area=False, random_state=args.seed)
+        best_params_a, cv_r2_a = {}, df_cand_a["r2_mean"].max()
 
     # 11. Final Held-Out Evaluation on Test Split (2011-2013)
     logger.info("--- Evaluating Variant A on Held-Out Test Set (2011-2013) ---")
@@ -515,6 +554,9 @@ def main() -> None:
     primary_model_name = best_cand_b if args.export_variant == "B" else best_cand_a
     features_list = config["data"]["features_variant_b"] if args.export_variant == "B" else config["data"]["features_variant_a"]
 
+    run_mode = "quick" if args.quick else "full"
+    train_row_count = len(df_train)
+
     export_yield_artifacts(
         pipeline=primary_pipe,
         feature_order=features_list,
@@ -531,6 +573,8 @@ def main() -> None:
         seed=args.seed,
         lower_quantile_pipe=q_low_pipe,
         upper_quantile_pipe=q_high_pipe,
+        run_mode=run_mode,
+        train_row_count=train_row_count,
     )
 
     # Also export Variant A as a standalone sub-artifact for zero-country inference option
@@ -555,6 +599,8 @@ def main() -> None:
         seed=args.seed,
         lower_quantile_pipe=q_low_a,
         upper_quantile_pipe=q_high_a,
+        run_mode=run_mode,
+        train_row_count=train_row_count,
     )
 
     # 16. Generate Comprehensive REPORT.md
@@ -575,7 +621,9 @@ def main() -> None:
         seed=args.seed,
     )
 
-    logger.info("Training and evaluation successfully completed. Artifacts exported to %s", artifacts_dir)
+    total_elapsed = time.perf_counter() - main_start_time
+    logger.info("Training pipeline completed in %.2fs (%.1f min). Artifacts exported to %s",
+                total_elapsed, total_elapsed / 60.0, artifacts_dir)
 
 
 if __name__ == "__main__":

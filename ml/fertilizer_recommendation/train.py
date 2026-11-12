@@ -1,10 +1,12 @@
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Any, Dict, List, Optional
 import matplotlib
 matplotlib.use("Agg")
@@ -61,6 +63,21 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def compute_code_hash(model_dir: Path) -> str:
+    """Compute deterministic SHA256 digest of config and all source files."""
+    hasher = hashlib.sha256()
+    cfg_file = model_dir / "config.yaml"
+    if cfg_file.exists():
+        hasher.update(cfg_file.read_bytes())
+    for py_file in sorted((model_dir / "src").glob("*.py")):
+        hasher.update(py_file.read_bytes())
+    common_dir = model_dir.parent / "common"
+    if common_dir.exists():
+        for py_file in sorted(common_dir.glob("*.py")):
+            hasher.update(py_file.read_bytes())
+    return hasher.hexdigest()[:8]
+
+
 def run_feature_ablation_study(
     df: pd.DataFrame,
     seed: int,
@@ -68,6 +85,7 @@ def run_feature_ablation_study(
     n_splits: int = 5,
     n_repeats: int = 3,
     cache_dir: Optional[Path | str] = None,
+    code_hash: str = "",
 ) -> pd.DataFrame:
     """Evaluate minimal feature engineering ablation (NPK ratios) under repeated CV."""
     logger.info("Running feature engineering ablation using %s...", champion_model)
@@ -83,7 +101,8 @@ def run_feature_ablation_study(
     results = []
     for cfg in configs:
         slug = re.sub(r"[^a-zA-Z0-9_]+", "_", cfg["name"].lower()).strip("_")
-        cache_file = ablation_cache_dir / f"{slug}_{champion_model}.json" if ablation_cache_dir else None
+        cache_filename = f"{slug}_{champion_model}_seed{seed}_{code_hash}.json" if code_hash else f"{slug}_{champion_model}.json"
+        cache_file = ablation_cache_dir / cache_filename if ablation_cache_dir else None
 
         if cache_file and cache_file.exists():
             try:
@@ -96,6 +115,7 @@ def run_feature_ablation_study(
             except Exception:
                 pass
 
+        t0 = time.perf_counter()
         eval_df = evaluate_candidates_repeated_cv(
             candidate_names=[champion_model],
             df=df,
@@ -103,17 +123,20 @@ def run_feature_ablation_study(
             n_repeats=n_repeats,
             add_engineered_features=cfg["add_engineered"],
             seed=seed,
+            code_hash=code_hash,
         )
+        elapsed = time.perf_counter() - t0
         row = eval_df.iloc[0].to_dict()
         row["configuration"] = cfg["name"]
+        row["elapsed_seconds"] = round(elapsed, 2)
         results.append(row)
 
         if cache_file:
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(row, f, indent=2)
 
-        logger.info("[Ablation: %s] Macro-F1: %.4f (+/- %.4f) | Accuracy: %.4f",
-                    cfg["name"], row["macro_f1_mean"], row["macro_f1_std"], row["accuracy_mean"])
+        logger.info("[Ablation: %s] Macro-F1: %.4f (+/- %.4f) | Accuracy: %.4f (Elapsed: %.2fs)",
+                    cfg["name"], row["macro_f1_mean"], row["macro_f1_std"], row["accuracy_mean"], elapsed)
 
     return pd.DataFrame(results)
 
@@ -299,14 +322,24 @@ def generate_markdown_report(
 
 
 def main() -> None:
+    main_start_time = time.perf_counter()
     args = parse_args()
+
+    model_dir = Path(__file__).resolve().parent
+    code_hash = compute_code_hash(model_dir)
 
     data_dir = Path(args.data_dir)
     output_dir = Path(args.output_dir)
     artifacts_dir = Path(args.artifacts_dir)
     config_path = Path(args.config)
-    cache_dir = output_dir / "cache"
 
+    if args.quick:
+        if args.output_dir == "reports/fertilizer_recommendation":
+            output_dir = Path("reports/fertilizer_recommendation_quick")
+        if args.artifacts_dir == "artifacts/fertilizer_recommendation":
+            artifacts_dir = Path("artifacts/fertilizer_recommendation_quick")
+
+    cache_dir = output_dir / "cache"
     output_dir.mkdir(parents=True, exist_ok=True)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -314,8 +347,9 @@ def main() -> None:
     # 1. Setup dual logger & seed
     setup_logger("ml.fertilizer_recommendation", log_file=output_dir / "train.log")
     seed_everything(args.seed)
-    logger.info("Starting Fertilizer Recommendation Pipeline (Quick Mode: %s, Seed: %d, N-Trials: %d)",
-                args.quick, args.seed, args.n_trials)
+    logger.info("Starting Fertilizer Recommendation Pipeline (Quick Mode: %s, Seed: %d, N-Trials: %d, CodeHash: %s)",
+                args.quick, args.seed, args.n_trials, code_hash)
+    logger.info("Output Dir: %s | Artifacts Dir: %s | Cache Dir: %s", output_dir, artifacts_dir, cache_dir)
 
     # 2. Load configuration
     with open(config_path, "r", encoding="utf-8") as f:
@@ -373,6 +407,7 @@ def main() -> None:
         n_repeats=n_cv_repeats,
         seed=args.seed,
         cache_dir=cache_dir,
+        code_hash=code_hash,
     )
     candidates_df.to_csv(output_dir / "cv_model_comparison.csv", index=False)
 
@@ -388,6 +423,7 @@ def main() -> None:
         n_splits=n_cv_splits,
         n_repeats=n_cv_repeats,
         cache_dir=cache_dir,
+        code_hash=code_hash,
     )
 
     # 8. Nested CV Hyperparameter Tuning on Champion
@@ -408,6 +444,7 @@ def main() -> None:
         n_iter=n_trials,
         seed=args.seed,
         cache_dir=cache_dir,
+        code_hash=code_hash,
     )
 
     # 9. Label Permutation Test (Prove model beats chance)
@@ -419,6 +456,7 @@ def main() -> None:
         n_splits=n_cv_splits,
         seed=args.seed,
         cache_dir=cache_dir,
+        code_hash=code_hash,
     )
     plot_permutation_test_distribution(
         null_scores=perm_test_metrics["null_scores"],
@@ -502,6 +540,8 @@ def main() -> None:
         output_dir=artifacts_dir,
         config=config,
         seed=args.seed,
+        run_mode="quick" if args.quick else "full",
+        train_row_count=len(df_clean),
     )
 
     # 14. Generate Comprehensive REPORT.md
@@ -518,7 +558,9 @@ def main() -> None:
         seed=args.seed,
     )
 
-    logger.info("Fertilizer training pipeline completed successfully. Artifacts exported to %s", artifacts_dir)
+    total_elapsed = time.perf_counter() - main_start_time
+    logger.info("Fertilizer training pipeline completed in %.2fs (%.1f min). Artifacts exported to %s",
+                total_elapsed, total_elapsed / 60.0, artifacts_dir)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import joblib
 import numpy as np
 import sklearn
@@ -41,6 +41,8 @@ def export_artifacts(
     seed: int,
     noise_robustness: Dict[str, Any],
     feature_engineering_used: bool,
+    run_mode: str = "full",
+    train_row_count: Optional[int] = None,
 ) -> Path:
     """Export all production artifacts for deployment and reproducibility.
 
@@ -114,6 +116,8 @@ def export_artifacts(
     metadata = {
         "model_name": chosen_model_name,
         "artifact_version": "1.0.0",
+        "run_mode": run_mode,
+        "train_row_count": train_row_count,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": get_git_commit_hash(),
         "seed": seed,

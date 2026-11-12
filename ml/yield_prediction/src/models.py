@@ -11,7 +11,7 @@ from sklearn.ensemble import (
     HistGradientBoostingRegressor,
     RandomForestRegressor,
 )
-from sklearn.linear_model import ElasticNet, Ridge
+from sklearn.linear_model import ElasticNet, ElasticNetCV, Ridge
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
@@ -94,7 +94,15 @@ def create_yield_pipeline(
     elif model_name == "Ridge":
         base_reg = Ridge(random_state=random_state, **params)
     elif model_name == "ElasticNet":
-        base_reg = ElasticNet(random_state=random_state, max_iter=2000, **params)
+        base_reg = ElasticNetCV(
+            l1_ratio=[0.1, 0.5, 0.7, 0.9, 0.99],
+            alphas=[1e-4, 1e-3, 1e-2, 0.1, 1.0, 10.0],
+            cv=3,
+            random_state=random_state,
+            max_iter=3000,
+            n_jobs=-1,
+            **params,
+        )
     elif model_name == "KNN":
         base_reg = KNeighborsRegressor(n_jobs=-1, **params)
     elif model_name == "RandomForest":
@@ -104,10 +112,16 @@ def create_yield_pipeline(
             **params,
         )
     elif model_name == "ExtraTrees":
+        et_params = {
+            "n_estimators": 150,
+            "max_features": 0.5,
+            "min_samples_leaf": 2,
+            "n_jobs": -1,
+        }
+        et_params.update(params)
         base_reg = ExtraTreesRegressor(
             random_state=random_state,
-            n_jobs=-1,
-            **params,
+            **et_params,
         )
     elif model_name == "GradientBoosting":
         base_reg = GradientBoostingRegressor(
@@ -212,9 +226,16 @@ def create_quantile_regressors(
 
 def get_yield_tuning_distributions(model_name: str) -> Dict[str, Any]:
     """Return hyperparameter search distributions for yield regressors."""
-    if model_name in ["RandomForest", "ExtraTrees"]:
+    if model_name == "ExtraTrees":
         return {
-            "regressor__regressor__n_estimators": [200, 300, 500],
+            "regressor__regressor__n_estimators": [100, 150],
+            "regressor__regressor__max_depth": [15, 20, 25, None],
+            "regressor__regressor__min_samples_leaf": [2, 4],
+            "regressor__regressor__max_features": [0.4, 0.5, 0.6],
+        }
+    elif model_name == "RandomForest":
+        return {
+            "regressor__regressor__n_estimators": [100, 150, 200],
             "regressor__regressor__max_depth": [10, 15, 20, 25, None],
             "regressor__regressor__min_samples_leaf": [1, 2, 4],
             "regressor__regressor__max_features": [0.5, 0.7, 1.0],

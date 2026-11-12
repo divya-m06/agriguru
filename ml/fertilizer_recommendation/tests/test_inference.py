@@ -9,7 +9,11 @@ from ml.fertilizer_recommendation.inference import (
     predict_fertilizer,
 )
 
-ARTIFACTS_DIR = Path("artifacts/fertilizer_recommendation")
+ARTIFACTS_DIR = (
+    Path("artifacts/fertilizer_recommendation")
+    if (Path("artifacts/fertilizer_recommendation") / "fertilizer_model.joblib").exists()
+    else Path("artifacts/fertilizer_recommendation_quick")
+)
 SPLITS_DIR = Path("data/fertilizer_recommendation/splits")
 
 

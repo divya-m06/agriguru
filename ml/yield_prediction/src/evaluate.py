@@ -7,6 +7,7 @@ import pandas as pd
 from sklearn.inspection import permutation_importance
 from sklearn.model_selection import GroupKFold, KFold, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
+import time
 
 from ml.common.metrics import calculate_per_crop_metrics, calculate_regression_metrics
 from ml.yield_prediction.src.models import (
@@ -99,6 +100,7 @@ def compare_candidates_cv(
     use_climate_anomaly: bool = False,
     seed: int = 42,
     cache_dir: Optional[Path | str] = None,
+    code_hash: str = "",
 ) -> pd.DataFrame:
     """Evaluate candidate regressors under expanding-window temporal CV with stage caching."""
     splits = generate_expanding_window_splits(df_train)
@@ -113,7 +115,8 @@ def compare_candidates_cv(
                 len(candidate_names), len(splits), "Variant B (with Area)" if include_area else "Variant A (without Area)")
 
     for name in candidate_names:
-        item_cache_file = cache_path / f"{variant_tag}_{name}.json" if cache_path else None
+        cache_filename = f"{variant_tag}_{name}_seed{seed}_{code_hash}.json" if code_hash else f"{variant_tag}_{name}.json"
+        item_cache_file = cache_path / cache_filename if cache_path else None
         if item_cache_file and item_cache_file.exists():
             try:
                 with open(item_cache_file, "r", encoding="utf-8") as f:
@@ -125,6 +128,7 @@ def compare_candidates_cv(
             except Exception as e:
                 logger.warning("Failed to load cache for %s (%s): %s. Recomputing...", name, variant_tag, e)
 
+        t0 = time.perf_counter()
         pipe = create_yield_pipeline(
             model_name=name,
             include_area=include_area,
@@ -134,17 +138,19 @@ def compare_candidates_cv(
             random_state=seed,
         )
         scores = run_temporal_cv(pipe, df_train, splits)
+        elapsed = time.perf_counter() - t0
         scores["model"] = name
         scores["include_area"] = include_area
         scores["include_year"] = include_year
+        scores["elapsed_seconds"] = round(elapsed, 2)
         results.append(scores)
 
         if item_cache_file:
             with open(item_cache_file, "w", encoding="utf-8") as f:
                 json.dump(scores, f, indent=2)
 
-        logger.info("[%s] Temporal CV R2: %.4f (+/- %.4f) | MAE: %.1f hg/ha | sMAPE: %.2f%%",
-                    name, scores["r2_mean"], scores["r2_std"], scores["mae_mean"], scores["smape_mean"])
+        logger.info("[%s] Temporal CV R2: %.4f (+/- %.4f) | MAE: %.1f hg/ha | sMAPE: %.2f%% (Elapsed: %.2fs)",
+                    name, scores["r2_mean"], scores["r2_std"], scores["mae_mean"], scores["smape_mean"], elapsed)
 
     df_res = pd.DataFrame(results).sort_values(by="r2_mean", ascending=False).reset_index(drop=True)
     return df_res
@@ -159,9 +165,11 @@ def run_group_kfold_cv(
     seed: int = 42,
     cache_dir: Optional[Path | str] = None,
     model_name: str = "model",
+    code_hash: str = "",
 ) -> Dict[str, float]:
     """Evaluate generalization to unseen countries using GroupKFold by Area with caching."""
-    cache_file = Path(cache_dir) / f"group_kfold_{model_name}.json" if cache_dir else None
+    cache_filename = f"group_kfold_{model_name}_seed{seed}_{code_hash}.json" if code_hash else f"group_kfold_{model_name}.json"
+    cache_file = Path(cache_dir) / cache_filename if cache_dir else None
     if cache_file and cache_file.exists():
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
@@ -171,6 +179,7 @@ def run_group_kfold_cv(
         except Exception:
             pass
 
+    t0 = time.perf_counter()
     gkf = GroupKFold(n_splits=n_splits)
     groups = df[group_col]
 
@@ -198,11 +207,13 @@ def run_group_kfold_cv(
         mae_scores.append(m["mae_hg_ha"])
         smape_scores.append(m["smape_pct"])
 
+    elapsed = time.perf_counter() - t0
     metrics = {
         "group_kfold_r2_mean": float(np.mean(r2_scores)),
         "group_kfold_r2_std": float(np.std(r2_scores)),
         "group_kfold_mae_mean": float(np.mean(mae_scores)),
         "group_kfold_smape_mean": float(np.mean(smape_scores)),
+        "elapsed_seconds": round(elapsed, 2),
     }
 
     if cache_file:
@@ -210,20 +221,25 @@ def run_group_kfold_cv(
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
 
+    logger.info("GroupKFold completed in %.2fs", elapsed)
     return metrics
 
 
 def run_leaky_random_split_cv(
     pipeline: Pipeline,
     df: pd.DataFrame,
-    n_splits: int = 5,
+    n_splits: int = 3,
+    subsample_frac: float = 0.3,
     target_col: str = "hg/ha_yield",
     seed: int = 42,
     cache_dir: Optional[Path | str] = None,
     model_name: str = "model",
+    code_hash: str = "",
 ) -> Dict[str, float]:
-    """Explicitly measure random-split CV score to demonstrate leakage magnitude vs temporal split with caching."""
-    cache_file = Path(cache_dir) / f"leaky_random_{model_name}.json" if cache_dir else None
+    """Explicitly measure random-split CV score to demonstrate leakage magnitude vs temporal split with caching.
+    Uses 3 folds on a 30% random subsample of the training rows for high-efficiency estimation."""
+    cache_filename = f"leaky_random_{model_name}_seed{seed}_{code_hash}.json" if code_hash else f"leaky_random_{model_name}.json"
+    cache_file = Path(cache_dir) / cache_filename if cache_dir else None
     if cache_file and cache_file.exists():
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
@@ -233,14 +249,16 @@ def run_leaky_random_split_cv(
         except Exception:
             pass
 
+    t0 = time.perf_counter()
+    eval_df = df.sample(frac=subsample_frac, random_state=seed).reset_index(drop=True) if subsample_frac < 1.0 else df
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
 
     r2_scores = []
     mae_scores = []
 
-    for train_idx, test_idx in kf.split(df):
-        train_fold = df.iloc[train_idx]
-        test_fold = df.iloc[test_idx]
+    for train_idx, test_idx in kf.split(eval_df):
+        train_fold = eval_df.iloc[train_idx]
+        test_fold = eval_df.iloc[test_idx]
 
         X_tr = train_fold.drop(columns=[target_col])
         y_tr = train_fold[target_col].to_numpy()
@@ -255,9 +273,11 @@ def run_leaky_random_split_cv(
         r2_scores.append(m["r2"])
         mae_scores.append(m["mae_hg_ha"])
 
+    elapsed = time.perf_counter() - t0
     metrics = {
         "random_split_leaky_r2": float(np.mean(r2_scores)),
         "random_split_leaky_mae": float(np.mean(mae_scores)),
+        "elapsed_seconds": round(elapsed, 2),
     }
 
     if cache_file:
@@ -265,6 +285,7 @@ def run_leaky_random_split_cv(
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
 
+    logger.info("Leaky Random CV completed in %.2fs", elapsed)
     return metrics
 
 
@@ -279,10 +300,12 @@ def tune_yield_model(
     seed: int = 42,
     target_col: str = "hg/ha_yield",
     cache_dir: Optional[Path | str] = None,
+    code_hash: str = "",
 ) -> Tuple[Pipeline, Dict[str, Any], float]:
     """Tune hyperparameters using expanding-window temporal CV with caching."""
     variant_tag = "Variant_B" if include_area else "Variant_A"
-    cache_file = Path(cache_dir) / f"tuning_{variant_tag}_{model_name}.json" if cache_dir else None
+    cache_filename = f"tuning_{variant_tag}_{model_name}_seed{seed}_{code_hash}.json" if code_hash else f"tuning_{variant_tag}_{model_name}.json"
+    cache_file = Path(cache_dir) / cache_filename if cache_dir else None
 
     base_pipe = create_yield_pipeline(
         model_name,
@@ -316,7 +339,9 @@ def tune_yield_model(
             logger.warning("Failed to load tuning cache for %s (%s): %s. Retuning...", model_name, variant_tag, e)
 
     logger.info("Tuning %s (%s, n_iter=%d)...", model_name, variant_tag, n_iter)
+    t0 = time.perf_counter()
     splits = generate_expanding_window_splits(df_train)
+    # Estimate on CV with serial folds and tree-level parallelism (or n_jobs=1 on CV)
     search = RandomizedSearchCV(
         base_pipe,
         param_distributions=param_dist,
@@ -324,11 +349,12 @@ def tune_yield_model(
         scoring="r2",
         cv=splits,
         random_state=seed,
-        n_jobs=-1,
+        n_jobs=1,
         refit=True,
     )
 
     search.fit(X, y)
+    elapsed = time.perf_counter() - t0
 
     best_params = search.best_params_
     best_score = float(search.best_score_)
@@ -336,7 +362,9 @@ def tune_yield_model(
     if cache_file:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump({"best_params": best_params, "best_score": best_score}, f, indent=2)
+            json.dump({"best_params": best_params, "best_score": best_score, "elapsed_seconds": round(elapsed, 2)}, f, indent=2)
+
+    logger.info("Tuning %s (%s) finished in %.2fs with best CV R2: %.4f", model_name, variant_tag, elapsed, best_score)
 
     logger.info("[%s (%s)] Best Temporal CV R2: %.4f with params: %s",
                 model_name, variant_tag, best_score, best_params)

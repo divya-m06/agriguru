@@ -82,8 +82,9 @@ class YieldFeatureTransformer(BaseEstimator, TransformerMixin):
             else:
                 if y is None:
                     raise ValueError("Target array y is required to fit TargetEncoder for Area in Variant B.")
-                self.area_encoder_ = TargetEncoder(smooth="auto")
-                self.area_encoder_.fit(df[["Area"]], y)
+                y_float = np.asarray(y, dtype=np.float64)
+                self.area_encoder_ = TargetEncoder(smooth="auto", target_type="continuous")
+                self.area_encoder_.fit(df[["Area"]], y_float)
 
         # 3. Fit historical climate anomaly baselines (training set only)
         if self.use_climate_anomaly:
@@ -96,6 +97,8 @@ class YieldFeatureTransformer(BaseEstimator, TransformerMixin):
                     "mean_rain": float(row["average_rain_fall_mm_per_year"]),
                     "mean_temp": float(row["avg_temp"]),
                 }
+            self.crop_rain_means_map_ = {str(k): v["mean_rain"] for k, v in self.crop_climate_means_.items()}
+            self.crop_temp_means_map_ = {str(k): v["mean_temp"] for k, v in self.crop_climate_means_.items()}
 
         # Build feature names
         feature_names = []
@@ -156,24 +159,16 @@ class YieldFeatureTransformer(BaseEstimator, TransformerMixin):
             rx_t = (rainfall * temp).reshape(-1, 1)
             parts.append(rx_t)
 
-        # 6. Climate anomaly relative to crop baseline
+        # 6. Climate anomaly relative to crop baseline (vectorized)
         if self.use_climate_anomaly:
-            rain_anomalies = []
-            temp_anomalies = []
-            for _, row in df.iterrows():
-                crop = str(row["Item"])
-                c_means = self.crop_climate_means_.get(
-                    crop,
-                    {"mean_rain": self.global_rain_mean_, "mean_temp": self.global_temp_mean_},
-                )
-                rain_anomalies.append(float(row["average_rain_fall_mm_per_year"]) - c_means["mean_rain"])
-                temp_anomalies.append(float(row["avg_temp"]) - c_means["mean_temp"])
-
-            rain_anom_arr = np.array(rain_anomalies, dtype=float).reshape(-1, 1)
-            temp_anom_arr = np.array(temp_anomalies, dtype=float).reshape(-1, 1)
+            item_series = df["Item"].astype(str)
+            rain_baseline = item_series.map(self.crop_rain_means_map_).fillna(self.global_rain_mean_).to_numpy(dtype=np.float32).reshape(-1, 1)
+            temp_baseline = item_series.map(self.crop_temp_means_map_).fillna(self.global_temp_mean_).to_numpy(dtype=np.float32).reshape(-1, 1)
+            rain_anom_arr = rainfall - rain_baseline
+            temp_anom_arr = temp - temp_baseline
             parts.extend([rain_anom_arr, temp_anom_arr])
 
-        result = np.hstack(parts)
+        result = np.hstack(parts).astype(np.float32)
         return result
 
     def get_feature_names_out(self, input_features: Optional[List[str]] = None) -> List[str]:

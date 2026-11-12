@@ -43,6 +43,8 @@ def export_yield_artifacts(
     seed: int,
     lower_quantile_pipe: Optional[Pipeline] = None,
     upper_quantile_pipe: Optional[Pipeline] = None,
+    run_mode: str = "full",
+    train_row_count: Optional[int] = None,
 ) -> Path:
     """Export all production artifacts for deployment and reproducibility."""
     out_path = Path(output_dir)
@@ -104,6 +106,8 @@ def export_yield_artifacts(
         "model_name": chosen_model_name,
         "variant": variant_name,
         "artifact_version": "1.0.0",
+        "run_mode": run_mode,
+        "train_row_count": train_row_count,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": get_git_commit_hash(),
         "seed": seed,
