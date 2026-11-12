@@ -289,3 +289,33 @@ def plot_residuals_by_year(
     plt.savefig(output_path, dpi=300)
     plt.close()
 
+
+def plot_permutation_test_distribution(
+    null_scores: Sequence[float] | np.ndarray,
+    observed_score: float,
+    p_value: float,
+    output_path: Path | str,
+    metric_name: str = "Macro-F1",
+    title: str = "Label Permutation Test vs Empirical Null Distribution",
+) -> None:
+    """Plot histogram of null permutation scores with observed score threshold and p-value."""
+    plt.figure(figsize=(8, 5))
+    sns.histplot(null_scores, kde=True, color="#1f77b4", label="Empirical Null Distribution")
+    plt.axvline(
+        observed_score,
+        color="#d62728",
+        linestyle="--",
+        linewidth=2,
+        label=f"Observed {metric_name} ({observed_score:.4f})",
+    )
+    plt.title(f"{title} (p = {p_value:.4f})", fontsize=13, pad=12)
+    plt.xlabel(f"{metric_name} Score", fontsize=11)
+    plt.ylabel("Frequency", fontsize=11)
+    plt.grid(True, linestyle="--", alpha=0.5)
+    plt.legend(loc="upper left", fontsize=10)
+    plt.tight_layout()
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+

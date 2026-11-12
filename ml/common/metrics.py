@@ -182,7 +182,40 @@ def calculate_per_crop_metrics(
             continue
         crop_metrics = calculate_regression_metrics(y_true_arr[mask], y_pred_arr[mask])
         crop_metrics["sample_count"] = int(np.sum(mask))
-        crop_metrics["mean_true_yield_hg_ha"] = float(np.mean(y_true_arr[mask]))
-        breakdown[str(crop)] = crop_metrics
-
     return breakdown
+
+
+def calculate_confidence_interval(
+    scores: Sequence[float] | np.ndarray,
+    confidence: float = 0.95,
+) -> Dict[str, float]:
+    """Calculate sample mean, std, standard error, and two-sided t-distribution confidence interval.
+
+    Args:
+        scores: Array of metric values across folds or repeats.
+        confidence: Desired confidence level (default: 0.95).
+
+    Returns:
+        Dictionary with mean, std, sem, ci_lower, and ci_upper.
+    """
+    import scipy.stats as stats
+
+    arr = np.asarray(scores, dtype=float)
+    n = len(arr)
+    mean = float(np.mean(arr))
+    std = float(np.std(arr, ddof=1)) if n > 1 else 0.0
+    sem = std / np.sqrt(n) if n > 1 else 0.0
+
+    if n > 1 and std > 0:
+        h = sem * float(stats.t.ppf((1 + confidence) / 2.0, df=n - 1))
+    else:
+        h = 0.0
+
+    return {
+        "mean": mean,
+        "std": std,
+        "sem": sem,
+        "ci_lower": mean - h,
+        "ci_upper": mean + h,
+    }
+

@@ -1,0 +1,53 @@
+seed: 42
+
+data:
+  filename: "Fertilizer Prediction.csv"
+  download_urls:
+    - "https://raw.githubusercontent.com/mohansaidinesh/Automated-Farming/master/Fertilizer%20Prediction.csv"
+    - "https://raw.githubusercontent.com/jayeshpandav/Hackspiration_cultivo/main/Fertilizer%20Prediction.csv"
+  column_renames:
+    "Temparature": "temperature"
+    "Humidity ": "humidity"
+    "Moisture": "moisture"
+    "Soil Type": "soil_type"
+    "Crop Type": "crop_type"
+    "Nitrogen": "nitrogen"
+    "Potassium": "potassium"
+    "Phosphorous": "phosphorous"
+    "Fertilizer Name": "fertilizer_name"
+  numeric_features:
+    - "temperature"
+    - "humidity"
+    - "moisture"
+    - "nitrogen"
+    - "potassium"
+    - "phosphorous"
+  categorical_features:
+    - "soil_type"
+    - "crop_type"
+  target: "fertilizer_name"
+
+cv:
+  model_comparison:
+    n_splits: 5
+    n_repeats: 5
+  nested_tuning:
+    outer_splits: 5
+    outer_repeats: 3
+    inner_splits: 3
+  holdout:
+    test_size: 0.20
+    random_state: 42
+
+permutation_test:
+  n_permutations: 200
+
+tuning:
+  n_trials: 20
+  random_state: 42
+  n_jobs: -1
+
+paths:
+  data_dir: "data/fertilizer_recommendation"
+  artifacts_dir: "artifacts/fertilizer_recommendation"
+  reports_dir: "reports/fertilizer_recommendation"
