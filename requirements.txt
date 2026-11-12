@@ -1,4 +1,4 @@
-# Pinned dependencies for production ML training and inference
+# Core ML Suite Dependencies (Training & Inference)
 numpy==2.4.6
 scipy==1.17.1
 pandas==3.0.5
@@ -15,3 +15,7 @@ pytest==9.1.1
 requests==2.34.2
 pillow==12.3.0
 imagehash==4.3.2
+
+# Deep Learning / Computer Vision (Model 2: Plant Disease Detection Local Inference)
+# Note: TensorFlow 2.16+ includes Keras 3 for .keras model loading on Windows CPU/GPU.
+tensorflow==2.21.0

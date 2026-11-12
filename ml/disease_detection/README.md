@@ -70,7 +70,28 @@ It mounts Google Drive, pulls the latest code from GitHub, checks GPU availabili
 
 ---
 
-## 5. Standalone FastAPI Inference Example
+## 5. Local Windows Setup & Inference
+
+To run local inference and unit tests on Windows without GPU training dependencies:
+
+### Installation
+```bash
+# Install core inference dependencies from root requirements.txt
+pip install -r requirements.txt
+```
+Or directly install TensorFlow:
+```bash
+pip install tensorflow==2.21.0
+```
+
+### Running Inference Tests
+```bash
+python -m pytest ml/disease_detection/tests/test_inference.py -v
+```
+
+---
+
+## 6. Standalone FastAPI Inference Example
 
 ```python
 from pathlib import Path
@@ -95,7 +116,7 @@ print("Top 3 Predictions:", result["top_predictions"])
 
 ---
 
-## 6. Critical Limitations
+## 7. Critical Limitations
 
 1. **Laboratory Bias:** PlantVillage consists of single leaves against uniform laboratory backgrounds with controlled lighting. Accuracy on field photographs with complex backgrounds and shadows may be lower (domain shift).
 2. **No 'Unknown / Non-Leaf' Class:** The dataset does not contain random non-leaf images. The model utilizes temperature-scaled confidence thresholds to flag uncertain predictions, but cannot substitute for expert agricultural lab pathology.

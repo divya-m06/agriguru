@@ -74,6 +74,8 @@ def generate_gradcam_heatmap(
         for layer in model.layers:
             if layer == submodel:
                 break
+            if isinstance(layer, (tf.keras.layers.InputLayer,)):
+                continue
             x = layer(x)
 
         conv_out, sub_out = sub_extractor(x)
@@ -83,6 +85,8 @@ def generate_gradcam_heatmap(
         passed_submodel = False
         for layer in model.layers:
             if passed_submodel:
+                if isinstance(layer, (tf.keras.layers.InputLayer,)):
+                    continue
                 head_out = layer(head_out)
             elif layer == submodel:
                 passed_submodel = True
@@ -147,7 +151,11 @@ def overlay_gradcam_on_image(
     Returns:
         Blended RGB uint8 image array shape (H, W, 3).
     """
-    cmap = cm.get_cmap(colormap)
+    try:
+        import matplotlib as mpl
+        cmap = mpl.colormaps[colormap]
+    except (AttributeError, KeyError):
+        cmap = cm.get_cmap(colormap)
     colored_heatmap = cmap(heatmap)  # (H, W, 4) in [0, 1]
     colored_heatmap = (colored_heatmap[:, :, :3] * 255).astype(np.float32)
 

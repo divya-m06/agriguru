@@ -63,9 +63,11 @@ class PlantDiseasePredictor:
             self.model = None
             logger.warning("TensorFlow not installed. Model object not initialized.")
 
-    def preprocess_image(self, image_input: Union[bytes, Image.Image, np.ndarray]) -> np.ndarray:
-        """Convert bytes, PIL Image, or numpy array into raw RGB float32 tensor (1, 224, 224, 3) in [0, 255]."""
-        if isinstance(image_input, bytes):
+    def preprocess_image(self, image_input: Union[bytes, Image.Image, np.ndarray, str, Path]) -> np.ndarray:
+        """Convert path, bytes, PIL Image, or numpy array into raw RGB float32 tensor (1, 224, 224, 3) in [0, 255]."""
+        if isinstance(image_input, (str, Path)):
+            pil_img = Image.open(image_input).convert("RGB")
+        elif isinstance(image_input, bytes):
             pil_img = Image.open(io.BytesIO(image_input)).convert("RGB")
         elif isinstance(image_input, Image.Image):
             pil_img = image_input.convert("RGB")
